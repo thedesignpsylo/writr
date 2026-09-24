@@ -77,3 +77,21 @@ html, body, #root { margin: 0; padding: 0; width: 100%; height: 100%; overflow: 
   0%, 99.9% { opacity: 1; }
   100%       { opacity: 0; }
 }
+
+/* Border snake glow */
+@keyframes snakeTravel {
+  from { stroke-dashoffset: 0; }
+  to   { stroke-dashoffset: var(--sp); }
+}
+
+/* Glassmorphic processing shimmer */
+@keyframes shimmerSlide {
+  0%   { transform: translateX(-150%); }
+  100% { transform: translateX(400%); }
+}
+
+/* Traveling glow on connection lines */
+@keyframes connSnake {
+  from { stroke-dashoffset: 55; }
+  to   { stroke-dashoffset: -955; }
+}

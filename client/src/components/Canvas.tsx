@@ -1,5 +1,5 @@
 import React, { useRef, useState, useCallback, useEffect } from 'react';
-import { Plus, ZoomIn, ZoomOut, Brain } from 'lucide-react';
+import { Plus, ZoomIn, ZoomOut, Brain, PenLine } from 'lucide-react';
 import TextNode, { NodeData } from './TextNode';
 
 interface Viewport { x: number; y: number; scale: number; }
@@ -70,15 +70,114 @@ export default function Canvas() {
   const [promptCanvasPos, setPromptCanvasPos] = useState<{ x: number; y: number } | null>(null);
   const [promptScreenPos, setPromptScreenPos] = useState<{ x: number; y: number } | null>(null);
   const [promptText, setPromptText] = useState('');
+  const [promptPanelH, setPromptPanelH] = useState(0);
+  const [darkMode, setDarkMode] = useState(true);
+  const [journalOpen, setJournalOpen] = useState(false);
+  const [journalText, setJournalText] = useState('');
+  const [journalLoading, setJournalLoading] = useState(false);
 
   const canvasRef = useRef<HTMLDivElement>(null);
   const vpRef = useRef(viewport);
+  const dotCanvasRef = useRef<HTMLCanvasElement>(null);
+  const dotMouseRef = useRef<{ x: number; y: number } | null>(null);
+  const dotDataRef = useRef<Map<string, { vx: number; vy: number; dx: number; dy: number }>>(new Map());
+  const dotRafRef = useRef<number>(0);
+  const nodesCountRef = useRef(0);
+  const darkModeRef = useRef(true);
   const isPanRef = useRef(false);
   const panStart = useRef<{ cx: number; cy: number; vx: number; vy: number } | null>(null);
   const spaceRef = useRef(false);
   const lastPos = useRef<{ x: number; y: number } | null>(null);
+  const promptPanelRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => { vpRef.current = viewport; }, [viewport]);
+  useEffect(() => { nodesCountRef.current = nodes.length; }, [nodes]);
+  useEffect(() => { darkModeRef.current = darkMode; }, [darkMode]);
+  useEffect(() => {
+    if (!promptOpen) return;
+    const el = promptPanelRef.current;
+    if (!el) return;
+    const obs = new ResizeObserver(() => setPromptPanelH(el.offsetHeight));
+    obs.observe(el);
+    return () => obs.disconnect();
+  }, [promptOpen]);
+
+  useEffect(() => {
+    const canvas = dotCanvasRef.current!;
+    const ctx = canvas.getContext('2d')!;
+
+    const SPACING = 28, REPEL_R = 165, REPEL_STR = 22000, SPRING_K = 0.055, DAMPING = 0.60, DOT_R = 1.5;
+
+    const resize = () => { canvas.width = window.innerWidth; canvas.height = window.innerHeight; };
+    resize();
+    window.addEventListener('resize', resize);
+
+    const trackMouse = (e: MouseEvent) => { dotMouseRef.current = { x: e.clientX, y: e.clientY }; };
+    const clearMouse = () => { dotMouseRef.current = null; };
+    window.addEventListener('mousemove', trackMouse);
+    document.documentElement.addEventListener('mouseleave', clearMouse);
+
+    const tick = () => {
+      const W = canvas.width, H = canvas.height;
+      ctx.clearRect(0, 0, W, H);
+      const dm = darkModeRef.current;
+      const hasNodes = nodesCountRef.current > 0;
+      ctx.fillStyle = dm
+        ? (hasNodes ? '#404040' : '#4a4a4a')
+        : (hasNodes ? '#aaaaaa' : '#999999');
+
+      const vp = vpRef.current;
+      const ox = ((vp.x % SPACING) + SPACING) % SPACING;
+      const oy = ((vp.y % SPACING) + SPACING) % SPACING;
+      const mx = dotMouseRef.current?.x ?? -9999;
+      const my = dotMouseRef.current?.y ?? -9999;
+
+      const iStart = Math.floor(-ox / SPACING) - 1, iEnd = Math.ceil((W - ox) / SPACING) + 1;
+      const jStart = Math.floor(-oy / SPACING) - 1, jEnd = Math.ceil((H - oy) / SPACING) + 1;
+
+      for (let i = iStart; i <= iEnd; i++) {
+        for (let j = jStart; j <= jEnd; j++) {
+          const restX = ox + i * SPACING, restY = oy + j * SPACING;
+          const key = `${i},${j}`;
+          let dot = dotDataRef.current.get(key) ?? { vx: 0, vy: 0, dx: 0, dy: 0 };
+
+          const cx = restX + dot.dx, cy = restY + dot.dy;
+          const distX = cx - mx, distY = cy - my;
+          const dist = Math.sqrt(distX * distX + distY * distY);
+
+          if (dist < REPEL_R && dist > 1) {
+            const force = (REPEL_STR / (dist * dist)) * (1 - dist / REPEL_R);
+            dot.vx += (distX / dist) * force * 0.016;
+            dot.vy += (distY / dist) * force * 0.016;
+          }
+
+          dot.vx -= dot.dx * SPRING_K;
+          dot.vy -= dot.dy * SPRING_K;
+          dot.vx *= DAMPING;
+          dot.vy *= DAMPING;
+          dot.dx += dot.vx;
+          dot.dy += dot.vy;
+
+          const active = Math.abs(dot.dx) > 0.05 || Math.abs(dot.dy) > 0.05 || Math.abs(dot.vx) > 0.005 || Math.abs(dot.vy) > 0.005;
+          if (active) { dotDataRef.current.set(key, dot); } else { dotDataRef.current.delete(key); dot.dx = 0; dot.dy = 0; }
+
+          ctx.beginPath();
+          ctx.arc(restX + dot.dx, restY + dot.dy, DOT_R, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
+
+      dotRafRef.current = requestAnimationFrame(tick);
+    };
+
+    dotRafRef.current = requestAnimationFrame(tick);
+    return () => {
+      cancelAnimationFrame(dotRafRef.current);
+      window.removeEventListener('resize', resize);
+      window.removeEventListener('mousemove', trackMouse);
+      document.documentElement.removeEventListener('mouseleave', clearMouse);
+    };
+  }, []);
 
   // ── Keyboard ─────────────────────────────────────────────────────
   useEffect(() => {
@@ -172,6 +271,20 @@ export default function Canvas() {
     else { x = (window.innerWidth / 2 - vp.x) / vp.scale - NODE_WIDTH / 2; y = (window.innerHeight / 2 - vp.y) / vp.scale - 140; }
     const id = uid();
     setNodes(p => [...p, { id, x, y, width: NODE_WIDTH, content: '', isProcessing: false, isNew: true }]);
+    setOrder(p => [...p, id]);
+    setSelectedId(id);
+    lastPos.current = { x, y };
+    setTimeout(() => setNodes(p => p.map(n => n.id === id ? { ...n, isNew: false } : n)), 400);
+  }, []);
+
+  const addBrainstormNode = useCallback(() => {
+    const vp = vpRef.current;
+    const BWIDTH = 400;
+    let x: number, y: number;
+    if (lastPos.current) { x = lastPos.current.x + GAP_X; y = lastPos.current.y + OFFSET_Y; }
+    else { x = (window.innerWidth / 2 - vp.x) / vp.scale - BWIDTH / 2; y = (window.innerHeight / 2 - vp.y) / vp.scale - 230; }
+    const id = uid();
+    setNodes(p => [...p, { id, x, y, width: BWIDTH, content: '', isProcessing: false, isNew: true, isBrainstorm: true, chatHistory: [] }]);
     setOrder(p => [...p, id]);
     setSelectedId(id);
     lastPos.current = { x, y };
@@ -345,6 +458,33 @@ export default function Canvas() {
     await createAndStream(canvasX, canvasY, [floatMenu.fromId, targetId], '/api/merge-text', { text1: from.content, text2: to.content });
   }
 
+  // ── Journal summarize ─────────────────────────────────────────────
+  async function doJournalSummarize() {
+    if (!journalText.trim() || journalLoading) return;
+    setJournalLoading(true);
+    const canvasNodes = nodes.filter(n => n.content.trim() && !n.isBrainstorm).map(n => n.content);
+    try {
+      const res = await fetch('/api/journal-summarize', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: journalText, canvasNodes }),
+      });
+      const data = await res.json();
+      if (data.result?.trim()) {
+        setJournalOpen(false);
+        const vp = vpRef.current;
+        const x = (window.innerWidth / 2 - vp.x) / vp.scale - NODE_WIDTH / 2;
+        const y = (window.innerHeight / 2 - vp.y) / vp.scale - 140;
+        const id = uid();
+        setNodes(p => [...p, { id, x, y, width: NODE_WIDTH, content: '', isProcessing: false, isStreaming: true, isNew: true }]);
+        setOrder(p => [...p, id]);
+        setTimeout(() => setNodes(p => p.map(n => n.id === id ? { ...n, isNew: false } : n)), 400);
+        typewriterAnimate(id, data.result);
+      }
+    } catch { /* silent */ }
+    setJournalLoading(false);
+  }
+
   // ── Prompt submit — reads directly from state (no stale closure) ──
   async function doPromptSubmit() {
     const prompt = promptText.trim();
@@ -381,21 +521,19 @@ export default function Canvas() {
 
   return (
     <div ref={canvasRef}
-      style={{ width: '100vw', height: '100vh', overflow: 'hidden', position: 'relative', background: '#0d0d0d', cursor }}
+      style={{ width: '100vw', height: '100vh', overflow: 'hidden', position: 'relative', background: darkMode ? '#0d0d0d' : '#f0f0f0', cursor }}
       onMouseDown={onMouseDown} onMouseMove={onMouseMove} onMouseUp={onMouseUp} onMouseLeave={onMouseUp}>
 
       {/* ── Dot grid ─────────────────────────────────────────────── */}
-      <div data-surface="1" style={{ position: 'absolute', inset: 0, pointerEvents: 'none', backgroundImage: 'radial-gradient(circle, #222 1.2px, transparent 1.2px)', backgroundSize: '28px 28px', backgroundPosition: `${viewport.x % 28}px ${viewport.y % 28}px` }} />
+      <canvas
+        ref={dotCanvasRef}
+        data-surface="1"
+        style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}
+      />
 
       {/* ── SVG lines ─────────────────────────────────────────────── */}
       <svg style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', pointerEvents: 'none', zIndex: 50, overflow: 'visible' }}>
         <defs>
-          <linearGradient id="lineGrad" x1="0%" y1="0%" x2="100%" y2="0%">
-            <stop offset="0%" stopColor="#7c3aed" /><stop offset="100%" stopColor="#ec4899" />
-          </linearGradient>
-          <linearGradient id="dragGrad" x1="0%" y1="0%" x2="100%" y2="0%">
-            <stop offset="0%" stopColor="#7c3aed" stopOpacity="0.85" /><stop offset="100%" stopColor="#ec4899" stopOpacity="0.85" />
-          </linearGradient>
           <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
             <feGaussianBlur stdDeviation="3" result="blur" />
             <feMerge><feMergeNode in="blur" /><feMergeNode in="SourceGraphic" /></feMerge>
@@ -410,15 +548,20 @@ export default function Canvas() {
           const p1 = c2s(p1c.x, p1c.y, viewport);
           const p2 = c2s(p2c.x, p2c.y, viewport);
           const d  = screenBezier(p1, p2, dir);
+          const gId = `cg-${conn.id}`;
           return (
             <g key={conn.id} style={{ animation: 'connLineIn 0.45s ease-out both' }}>
-              <path d={d} stroke="url(#lineGrad)" strokeWidth={8} fill="none" opacity={0.15} filter="url(#glow)" />
-              <path d={d} stroke="url(#lineGrad)" strokeWidth={2.5} fill="none" strokeDasharray="10 6"
-                style={{ animation: 'dashFlow 0.7s linear infinite' }} />
-              <circle cx={p1.x} cy={p1.y} r={5} fill="#7c3aed"
-                style={{ transformBox: 'fill-box', transformOrigin: 'center', animation: 'springDotIn 0.75s cubic-bezier(0.34,1.56,0.64,1) both, gravityFloat 2.8s ease-in-out 0.75s infinite' }} />
-              <circle cx={p2.x} cy={p2.y} r={5} fill="#ec4899"
-                style={{ transformBox: 'fill-box', transformOrigin: 'center', animation: 'springDotIn 0.75s cubic-bezier(0.34,1.56,0.64,1) 0.08s both, gravityFloat 2.8s ease-in-out 0.83s infinite' }} />
+              <defs>
+                <linearGradient id={gId} gradientUnits="userSpaceOnUse" x1={p1.x} y1={p1.y} x2={p2.x} y2={p2.y}>
+                  <stop offset="0%" stopColor="#f97316" stopOpacity="0.45" />
+                  <stop offset="100%" stopColor="#fb923c" stopOpacity="1" />
+                </linearGradient>
+              </defs>
+              <path d={d} stroke={`url(#${gId})`} strokeWidth={8} fill="none" opacity={0.18} filter="url(#glow)" />
+              <path d={d} stroke={`url(#${gId})`} strokeWidth={2} fill="none" />
+              <path d={d} stroke="#fb923c" strokeWidth={3} fill="none"
+                strokeDasharray="55 900"
+                style={{ animation: 'connSnake 2.2s linear infinite', filter: 'drop-shadow(0 0 5px #f97316) drop-shadow(0 0 2px #fb923c)' }} />
             </g>
           );
         })}
@@ -429,11 +572,8 @@ export default function Canvas() {
           const d  = screenBezier(p1, p2);
           return (
             <g>
-              <path d={d} stroke="url(#dragGrad)" strokeWidth={7} fill="none" opacity={0.12} />
-              <path d={d} stroke="url(#dragGrad)" strokeWidth={2} fill="none" strokeDasharray="8 5"
-                style={{ animation: 'dashFlow 0.55s linear infinite' }} />
-              <circle cx={p1.x} cy={p1.y} r={6} fill="#7c3aed" />
-              <circle cx={p2.x} cy={p2.y} r={6} fill="#ec4899" opacity={0.8} />
+              <path d={d} stroke="rgba(251,146,60,0.3)" strokeWidth={7} fill="none" />
+              <path d={d} stroke="rgba(251,146,60,0.75)" strokeWidth={2} fill="none" />
             </g>
           );
         })()}
@@ -481,6 +621,7 @@ export default function Canvas() {
               onConnectionDragStart={(fx, fy, mx, my) => onConnectionDragStart(node.id, fx, fy, mx, my)}
               onHeightChange={h => updateHeight(node.id, h)}
               connectedContents={connectedContents}
+              darkMode={darkMode}
             />
           );
         })}
@@ -494,14 +635,14 @@ export default function Canvas() {
 
         return (
           <div onMouseDown={e => e.stopPropagation()}
-            style={{ position: 'fixed', left, top, width: W, background: 'rgba(10,6,22,0.97)', border: '1px solid rgba(124,58,237,0.35)', borderRadius: 14, padding: '8px', boxShadow: '0 14px 56px rgba(0,0,0,0.75)', zIndex: 9000, backdropFilter: 'blur(20px)', animation: 'menuIn 0.18s cubic-bezier(0.34,1.56,0.64,1) both' }}>
+            style={{ position: 'fixed', left, top, width: W, background: darkMode ? 'rgba(10,10,10,0.97)' : 'rgba(252,252,252,0.97)', border: `1px solid ${darkMode ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.1)'}`, borderRadius: 14, padding: '8px', boxShadow: '0 14px 60px rgba(0,0,0,0.9)', zIndex: 9000, backdropFilter: 'blur(20px)', animation: 'menuIn 0.18s cubic-bezier(0.34,1.56,0.64,1) both' }}>
 
             {floatMenu.mode === 'root' && <>
-              <p style={{ margin: '0 0 7px 4px', fontFamily: 'Inter,system-ui', fontSize: 10, fontWeight: 600, color: '#4b5563', letterSpacing: '0.08em', textTransform: 'uppercase' }}>From this node</p>
-              <MenuBtn onClick={openPromptFromMenu} accent>✦ Prompt <Dim>— transform &amp; style</Dim></MenuBtn>
-              <MenuBtn onClick={doBrainstorm}><Brain size={12} strokeWidth={2} style={{ display: 'inline-block', verticalAlign: 'middle', marginRight: 5, marginTop: -1 }} /> Brainstorm <Dim>— think &amp; explore</Dim></MenuBtn>
-              <MenuBtn onClick={openMergePickFromMenu}>⊕ Merge <Dim>— blend with another node</Dim></MenuBtn>
-              <MenuBtn onClick={doNewNode}>○ New Node <Dim>— blank, connected</Dim></MenuBtn>
+              <p style={{ margin: '0 0 7px 4px', fontFamily: 'Inter,system-ui', fontSize: 10, fontWeight: 600, color: darkMode ? 'rgba(255,255,255,0.2)' : 'rgba(0,0,0,0.3)', letterSpacing: '0.08em', textTransform: 'uppercase' }}>From this node</p>
+              <GlowMenuBtn onClick={openPromptFromMenu} label="✦ Prompt" dim="— transform & style" darkMode={darkMode} />
+              <GlowMenuBtn onClick={doBrainstorm} icon={<Brain size={12} strokeWidth={2} />} label="Brainstorm" dim="— think & explore" darkMode={darkMode} />
+              <GlowMenuBtn onClick={openMergePickFromMenu} label="⊕ Merge" dim="— blend with another node" darkMode={darkMode} />
+              <GlowMenuBtn onClick={doNewNode} label="○ New Node" dim="— blank, connected" darkMode={darkMode} />
             </>}
 
             {floatMenu.mode === 'merge-pick' && <>
@@ -534,55 +675,104 @@ export default function Canvas() {
         const top  = Math.max(12, Math.min(sy - 20, window.innerHeight - 360));
 
         return (
-          <div onMouseDown={e => e.stopPropagation()}
-            style={{ position: 'fixed', left, top, width: W, background: 'rgba(10,6,22,0.98)', border: '1px solid rgba(124,58,237,0.35)', borderRadius: 18, padding: '20px', boxShadow: '0 20px 72px rgba(0,0,0,0.85)', zIndex: 9000, backdropFilter: 'blur(24px)', animation: 'menuIn 0.2s cubic-bezier(0.34,1.56,0.64,1) both' }}>
+          <div ref={promptPanelRef} onMouseDown={e => e.stopPropagation()}
+            style={{ position: 'fixed', left, top, width: W, background: 'rgba(12,8,4,0.98)', border: '1px solid rgba(249,115,22,0.28)', borderRadius: 18, padding: '20px', boxShadow: '0 20px 72px rgba(0,0,0,0.88), 0 0 0 1px rgba(249,115,22,0.1)', zIndex: 9000, backdropFilter: 'blur(24px)', animation: 'menuIn 0.2s cubic-bezier(0.34,1.56,0.64,1) both' }}>
 
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
-              <span style={{ fontFamily: 'Inter,system-ui', fontSize: 13, fontWeight: 700, color: '#c4b5fd' }}>✦ Prompt Transform</span>
-              <button onClick={() => { setPromptOpen(false); setPromptText(''); }}
-                style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#4b5563', fontSize: 16, lineHeight: 1, padding: '0 2px', transition: 'color 0.12s' }}
-                onMouseEnter={e => (e.currentTarget.style.color = '#9ca3af')} onMouseLeave={e => (e.currentTarget.style.color = '#4b5563')}>✕</button>
-            </div>
+            <PromptSnake width={W} height={promptPanelH} />
 
-            {/* Textarea first */}
-            <textarea
-              value={promptText}
-              onChange={e => setPromptText(e.target.value)}
-              placeholder={"Describe how to transform this…\ne.g. Rewrite as a product launch announcement"}
-              rows={4}
-              autoFocus
-              style={{ width: '100%', borderRadius: 12, border: '1px solid rgba(124,58,237,0.3)', background: 'rgba(124,58,237,0.06)', color: '#e5e7eb', fontFamily: 'Inter,system-ui', fontSize: 12, lineHeight: 1.65, padding: '12px 14px', resize: 'none', outline: 'none', boxSizing: 'border-box', marginBottom: 14 }}
-              onFocus={e => (e.currentTarget.style.borderColor = 'rgba(124,58,237,0.7)')}
-              onBlur={e => (e.currentTarget.style.borderColor = 'rgba(124,58,237,0.3)')}
-              onKeyDown={e => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); doPromptSubmit(); } }}
-            />
+            <div style={{ position: 'relative', zIndex: 1 }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
+                <span style={{ fontFamily: 'Inter,system-ui', fontSize: 13, fontWeight: 700, color: '#fb923c' }}>✦ Prompt Transform</span>
+                <button onClick={() => { setPromptOpen(false); setPromptText(''); }}
+                  style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#4b5563', fontSize: 16, lineHeight: 1, padding: '0 2px', transition: 'color 0.12s' }}
+                  onMouseEnter={e => (e.currentTarget.style.color = '#9ca3af')} onMouseLeave={e => (e.currentTarget.style.color = '#4b5563')}>✕</button>
+              </div>
 
-            {/* Platform pills */}
-            <p style={{ margin: '0 0 8px 2px', fontFamily: 'Inter,system-ui', fontSize: 10, fontWeight: 600, color: '#4b5563', letterSpacing: '0.07em', textTransform: 'uppercase' }}>Quick presets — click to load</p>
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 7, marginBottom: 18 }}>
-              {PLATFORM_PILLS.map(p => (
-                <button key={p.key} onClick={() => setPromptText(p.prompt)}
-                  style={{ padding: '6px 12px', borderRadius: 20, border: `1px solid ${promptText === p.prompt ? 'rgba(124,58,237,0.6)' : 'rgba(255,255,255,0.1)'}`, cursor: 'pointer', background: promptText === p.prompt ? 'rgba(124,58,237,0.35)' : 'rgba(255,255,255,0.05)', color: promptText === p.prompt ? '#c4b5fd' : '#9ca3af', fontFamily: 'Inter,system-ui', fontSize: 11, fontWeight: 600, whiteSpace: 'nowrap', transition: 'all 0.15s' }}
-                  onMouseEnter={e => { if (promptText !== p.prompt) { e.currentTarget.style.background = 'rgba(255,255,255,0.1)'; e.currentTarget.style.color = '#e5e7eb'; } }}
-                  onMouseLeave={e => { if (promptText !== p.prompt) { e.currentTarget.style.background = 'rgba(255,255,255,0.05)'; e.currentTarget.style.color = '#9ca3af'; } }}>
-                  {p.label}
+              <textarea
+                value={promptText}
+                onChange={e => setPromptText(e.target.value)}
+                placeholder={"Describe how to transform this…\ne.g. Rewrite as a product launch announcement"}
+                rows={4}
+                autoFocus
+                style={{ width: '100%', borderRadius: 12, border: '1px solid rgba(249,115,22,0.22)', background: 'rgba(249,115,22,0.05)', color: '#e5e7eb', fontFamily: 'Inter,system-ui', fontSize: 12, lineHeight: 1.65, padding: '12px 14px', resize: 'none', outline: 'none', boxSizing: 'border-box', marginBottom: 14, transition: 'border-color 0.15s' }}
+                onFocus={e => (e.currentTarget.style.borderColor = 'rgba(249,115,22,0.65)')}
+                onBlur={e => (e.currentTarget.style.borderColor = 'rgba(249,115,22,0.22)')}
+                onKeyDown={e => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); doPromptSubmit(); } }}
+              />
+
+              <p style={{ margin: '0 0 8px 2px', fontFamily: 'Inter,system-ui', fontSize: 10, fontWeight: 600, color: '#4b5563', letterSpacing: '0.07em', textTransform: 'uppercase' }}>Quick presets — click to load</p>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 7, marginBottom: 18 }}>
+                {PLATFORM_PILLS.map(p => (
+                  <button key={p.key} onClick={() => setPromptText(p.prompt)}
+                    style={{ padding: '6px 12px', borderRadius: 20, border: `1px solid ${promptText === p.prompt ? 'rgba(249,115,22,0.55)' : 'rgba(255,255,255,0.1)'}`, cursor: 'pointer', background: promptText === p.prompt ? 'rgba(249,115,22,0.18)' : 'rgba(255,255,255,0.05)', color: promptText === p.prompt ? '#fdba74' : '#9ca3af', fontFamily: 'Inter,system-ui', fontSize: 11, fontWeight: 600, whiteSpace: 'nowrap', transition: 'all 0.15s' }}
+                    onMouseEnter={e => { if (promptText !== p.prompt) { e.currentTarget.style.background = 'rgba(255,255,255,0.1)'; e.currentTarget.style.color = '#e5e7eb'; } }}
+                    onMouseLeave={e => { if (promptText !== p.prompt) { e.currentTarget.style.background = 'rgba(255,255,255,0.05)'; e.currentTarget.style.color = '#9ca3af'; } }}>
+                    {p.label}
+                  </button>
+                ))}
+              </div>
+
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button onClick={() => { setPromptOpen(false); setPromptText(''); }}
+                  style={{ flex: 1, padding: '10px', borderRadius: 11, border: '1px solid rgba(255,255,255,0.08)', cursor: 'pointer', background: 'transparent', color: '#6b7280', fontFamily: 'Inter,system-ui', fontSize: 12, fontWeight: 600 }}>
+                  Cancel
                 </button>
-              ))}
-            </div>
-
-            <div style={{ display: 'flex', gap: 8 }}>
-              <button onClick={() => { setPromptOpen(false); setPromptText(''); }}
-                style={{ flex: 1, padding: '10px', borderRadius: 11, border: '1px solid rgba(255,255,255,0.08)', cursor: 'pointer', background: 'transparent', color: '#6b7280', fontFamily: 'Inter,system-ui', fontSize: 12, fontWeight: 600 }}>
-                Cancel
-              </button>
-              <button onClick={doPromptSubmit} disabled={!promptText.trim()}
-                style={{ flex: 2, padding: '10px', borderRadius: 11, border: 'none', cursor: promptText.trim() ? 'pointer' : 'default', background: promptText.trim() ? 'linear-gradient(135deg,#7c3aed,#ec4899)' : 'rgba(255,255,255,0.06)', color: promptText.trim() ? '#fff' : '#4b5563', fontFamily: 'Inter,system-ui', fontSize: 12, fontWeight: 700, boxShadow: promptText.trim() ? '0 4px 20px rgba(124,58,237,0.45)' : 'none', transition: 'all 0.15s' }}>
-                ✦ Transform &nbsp;<span style={{ opacity: 0.65, fontWeight: 400, fontSize: 10 }}>⌘↵</span>
-              </button>
+                <button onClick={doPromptSubmit} disabled={!promptText.trim()}
+                  style={{ flex: 2, padding: '10px', borderRadius: 11, border: 'none', cursor: promptText.trim() ? 'pointer' : 'default', background: promptText.trim() ? 'linear-gradient(135deg,#f97316,#fb923c)' : 'rgba(255,255,255,0.06)', color: promptText.trim() ? '#fff' : '#4b5563', fontFamily: 'Inter,system-ui', fontSize: 12, fontWeight: 700, boxShadow: promptText.trim() ? '0 4px 20px rgba(249,115,22,0.4)' : 'none', transition: 'all 0.15s' }}>
+                  ✦ Transform &nbsp;<span style={{ opacity: 0.65, fontWeight: 400, fontSize: 10 }}>⌘↵</span>
+                </button>
+              </div>
             </div>
           </div>
         );
       })()}
+
+      {/* ── Journal Panel ─────────────────────────────────────────── */}
+      {journalOpen && (
+        <div onMouseDown={e => e.stopPropagation()} onClick={() => setJournalOpen(false)}
+          style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', backdropFilter: 'blur(6px)', zIndex: 9500, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <div onClick={e => e.stopPropagation()}
+            style={{ width: 540, maxWidth: 'calc(100vw - 48px)', background: darkMode ? '#111111' : '#ffffff', border: `1px solid ${darkMode ? '#252525' : '#e0e0e0'}`, borderRadius: 20, padding: '24px', boxShadow: '0 28px 90px rgba(0,0,0,0.85)', display: 'flex', flexDirection: 'column', gap: 16, animation: 'menuIn 0.22s cubic-bezier(0.34,1.56,0.64,1) both' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <PenLine size={15} color={darkMode ? '#888' : '#666'} strokeWidth={1.8} />
+                <span style={{ fontFamily: 'Inter,system-ui', fontSize: 14, fontWeight: 700, color: darkMode ? '#e0e0e0' : '#1a1a1a', letterSpacing: '-0.01em' }}>Journal</span>
+              </div>
+              <button onClick={() => setJournalOpen(false)}
+                style={{ background: 'none', border: 'none', cursor: 'pointer', color: darkMode ? '#444' : '#aaa', fontSize: 18, lineHeight: 1, padding: '2px 4px', transition: 'color 0.15s' }}
+                onMouseEnter={e => (e.currentTarget.style.color = darkMode ? '#888' : '#555')}
+                onMouseLeave={e => (e.currentTarget.style.color = darkMode ? '#444' : '#aaa')}>✕</button>
+            </div>
+            <textarea
+              value={journalText}
+              onChange={e => setJournalText(e.target.value)}
+              placeholder="Write freely — explore thoughts, capture moments, untangle ideas..."
+              autoFocus
+              rows={13}
+              style={{ width: '100%', border: `1px solid ${darkMode ? '#2a2a2a' : '#e8e8e8'}`, borderRadius: 12, background: darkMode ? '#1a1a1a' : '#f9f9f9', color: darkMode ? '#d0d0d0' : '#1a1a2e', fontFamily: "'Lora','Georgia',serif", fontSize: 15, lineHeight: 1.85, padding: '16px 18px', resize: 'none', outline: 'none', boxSizing: 'border-box', transition: 'border-color 0.15s' }}
+              onFocus={e => (e.currentTarget.style.borderColor = darkMode ? '#3a3a3a' : '#bbb')}
+              onBlur={e => (e.currentTarget.style.borderColor = darkMode ? '#2a2a2a' : '#e8e8e8')}
+            />
+            <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+              <span style={{ fontFamily: 'Inter,system-ui', fontSize: 11, color: darkMode ? '#3a3a3a' : '#ccc', flex: 1 }}>
+                {journalText.trim() ? journalText.trim().split(/\s+/).length : 0} words
+              </span>
+              <button onClick={() => { setJournalOpen(false); setJournalText(''); }}
+                style={{ padding: '9px 18px', borderRadius: 10, border: `1px solid ${darkMode ? '#2a2a2a' : '#e0e0e0'}`, background: 'transparent', cursor: 'pointer', fontFamily: 'Inter,system-ui', fontSize: 12, fontWeight: 600, color: darkMode ? '#555' : '#999', transition: 'color 0.15s' }}
+                onMouseEnter={e => (e.currentTarget.style.color = darkMode ? '#aaa' : '#555')}
+                onMouseLeave={e => (e.currentTarget.style.color = darkMode ? '#555' : '#999')}>
+                Discard
+              </button>
+              <button onClick={doJournalSummarize} disabled={!journalText.trim() || journalLoading}
+                style={{ padding: '9px 22px', borderRadius: 10, border: 'none', cursor: journalText.trim() && !journalLoading ? 'pointer' : 'default', background: journalText.trim() && !journalLoading ? (darkMode ? 'rgba(255,255,255,0.9)' : '#1a1a1a') : (darkMode ? '#222' : '#ebebeb'), color: journalText.trim() && !journalLoading ? (darkMode ? '#1a1a1a' : '#fff') : (darkMode ? '#444' : '#bbb'), fontFamily: 'Inter,system-ui', fontSize: 12, fontWeight: 700, transition: 'all 0.15s', display: 'flex', alignItems: 'center', gap: 6 }}>
+                {journalLoading
+                  ? <><div style={{ width: 11, height: 11, borderRadius: '50%', border: `2px solid ${darkMode ? 'rgba(0,0,0,0.15)' : 'rgba(255,255,255,0.2)'}`, borderTopColor: darkMode ? '#1a1a1a' : '#fff', animation: 'spin 0.65s linear infinite' }} />Thinking…</>
+                  : '✦ Summarise & add to canvas'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Empty state */}
       {nodes.length === 0 && (
@@ -595,67 +785,178 @@ export default function Canvas() {
 
       {/* Connection drag hint */}
       {connDrag && (
-        <div style={{ position: 'fixed', top: 24, left: '50%', transform: 'translateX(-50%)', background: 'rgba(15,10,30,0.92)', border: '1px solid rgba(124,58,237,0.5)', borderRadius: 12, padding: '8px 18px', fontFamily: 'Inter,system-ui', fontSize: 12, color: '#c4b5fd', fontWeight: 600, pointerEvents: 'none', zIndex: 9999 }}>
+        <div style={{ position: 'fixed', top: 24, left: '50%', transform: 'translateX(-50%)', background: darkMode ? 'rgba(15,10,30,0.92)' : 'rgba(255,255,255,0.92)', border: `1px solid ${darkMode ? 'rgba(124,58,237,0.5)' : 'rgba(0,0,0,0.12)'}`, color: darkMode ? '#c4b5fd' : '#555', borderRadius: 12, padding: '8px 18px', fontFamily: 'Inter,system-ui', fontSize: 12, fontWeight: 600, pointerEvents: 'none', zIndex: 9999 }}>
           Drop on a node to connect · Drop on canvas to open menu · Esc to cancel
         </div>
       )}
 
       {/* ── WRITR brand ──────────────────────────────────────────── */}
       <div style={{ position: 'fixed', top: 22, left: 24, zIndex: 100, pointerEvents: 'none', userSelect: 'none' }}>
-        <span style={{ fontFamily: 'Inter,system-ui', fontSize: 17, fontWeight: 800, color: '#fff', letterSpacing: '-0.04em' }}>WRITR</span>
+        <span style={{ fontFamily: 'Inter,system-ui', fontSize: 17, fontWeight: 800, color: darkMode ? '#fff' : '#0d0d0d', letterSpacing: '-0.04em' }}>WRITR</span>
       </div>
 
-      {/* Bottom bar */}
-      <div style={{ position: 'fixed', bottom: 24, left: '50%', transform: 'translateX(-50%)', display: 'flex', alignItems: 'center', gap: 6, background: '#161616', border: '1px solid #272727', borderRadius: 14, padding: '7px 12px', boxShadow: '0 8px 32px rgba(0,0,0,0.6)', userSelect: 'none', zIndex: 100 }}>
-        <ToolBtn onClick={() => setViewport(v => ({ ...v, scale: Math.max(MIN_SCALE, v.scale * 0.83) }))}><ZoomOut size={13} /></ToolBtn>
-        <button onClick={() => setViewport({ x: 0, y: 0, scale: 1 })} style={{ fontFamily: 'Inter,system-ui', fontSize: 11, fontWeight: 600, color: '#555', background: 'none', border: 'none', cursor: 'pointer', padding: '0 6px', minWidth: 40 }} onMouseEnter={e => (e.currentTarget.style.color = '#aaa')} onMouseLeave={e => (e.currentTarget.style.color = '#555')}>
+      {/* ── Bottom toolbar ────────────────────────────────────────── */}
+      <div style={{ position: 'fixed', bottom: 24, left: '50%', transform: 'translateX(-50%)', display: 'flex', alignItems: 'center', gap: 5, background: darkMode ? '#161616' : '#ffffff', border: `1px solid ${darkMode ? '#272727' : '#e8e8e8'}`, borderRadius: 18, padding: '5px 8px', boxShadow: darkMode ? '0 8px 32px rgba(0,0,0,0.7)' : '0 8px 32px rgba(0,0,0,0.1)', userSelect: 'none', zIndex: 100 }}>
+        <ToolBtn darkMode={darkMode} title="Zoom out" onClick={() => setViewport(v => ({ ...v, scale: Math.max(MIN_SCALE, v.scale * 0.83) }))}><ZoomOut size={13} /></ToolBtn>
+        <button onClick={() => setViewport({ x: 0, y: 0, scale: 1 })} title="Reset zoom" style={{ fontFamily: 'Inter,system-ui', fontSize: 11, fontWeight: 600, color: darkMode ? '#555' : '#888', background: 'none', border: 'none', cursor: 'pointer', padding: '0 6px', minWidth: 40, transition: 'color 0.15s' }} onMouseEnter={e => (e.currentTarget.style.color = darkMode ? '#aaa' : '#333')} onMouseLeave={e => (e.currentTarget.style.color = darkMode ? '#555' : '#888')}>
           {Math.round(viewport.scale * 100)}%
         </button>
-        <ToolBtn onClick={() => setViewport(v => ({ ...v, scale: Math.min(MAX_SCALE, v.scale * 1.2) }))}><ZoomIn size={13} /></ToolBtn>
-        <div style={{ width: 1, height: 16, background: '#272727', margin: '0 4px' }} />
-        <span style={{ fontSize: 10, color: '#2e2e2e', fontFamily: 'Inter,system-ui', whiteSpace: 'nowrap' }}>
-          Space+drag to pan · Ctrl+scroll to zoom · hover edge to connect
+        <ToolBtn darkMode={darkMode} title="Zoom in" onClick={() => setViewport(v => ({ ...v, scale: Math.min(MAX_SCALE, v.scale * 1.2) }))}><ZoomIn size={13} /></ToolBtn>
+        <div style={{ width: 1, height: 18, background: darkMode ? '#2a2a2a' : '#e0e0e0', margin: '0 6px' }} />
+        <span style={{ fontSize: 10, color: darkMode ? '#3a3a3a' : '#b8b8b8', fontFamily: 'Inter,system-ui', whiteSpace: 'nowrap', padding: '0 2px' }}>
+          Space+drag · Ctrl+scroll · edge to connect
         </span>
+        <div style={{ width: 1, height: 18, background: darkMode ? '#2a2a2a' : '#e0e0e0', margin: '0 6px' }} />
+        <button onClick={() => setDarkMode(d => !d)}
+          style={{ padding: '0 10px', height: 28, borderRadius: 8, border: 'none', background: 'transparent', cursor: 'pointer', color: darkMode ? '#555' : '#888', fontFamily: 'Inter,system-ui', fontSize: 11, fontWeight: 600, transition: 'color 0.15s', whiteSpace: 'nowrap' }}
+          onMouseEnter={e => (e.currentTarget.style.color = darkMode ? '#bbb' : '#333')}
+          onMouseLeave={e => (e.currentTarget.style.color = darkMode ? '#555' : '#888')}>
+          {darkMode ? '☀ Light' : '◐ Dark'}
+        </button>
+        <div style={{ width: 1, height: 18, background: darkMode ? '#2a2a2a' : '#e0e0e0', margin: '0 2px 0 6px' }} />
+        <ToolBtn darkMode={darkMode} bright title="Add brainstorm node" onClick={addBrainstormNode}>
+          <Brain size={14} strokeWidth={1.8} />
+        </ToolBtn>
+        <ToolBtn darkMode={darkMode} bright title="Journal" onClick={() => setJournalOpen(true)}>
+          <PenLine size={14} strokeWidth={1.8} />
+        </ToolBtn>
+        <button onClick={addNode}
+          style={{ width: 32, height: 32, borderRadius: 10, border: 'none', background: darkMode ? 'rgba(255,255,255,0.9)' : '#1a1a1a', color: darkMode ? '#0d0d0d' : '#fff', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, transition: 'transform 0.18s cubic-bezier(0.34,1.56,0.64,1)' }}
+          title="Add text node"
+          onMouseEnter={e => (e.currentTarget.style.transform = 'scale(1.1)')}
+          onMouseLeave={e => (e.currentTarget.style.transform = 'scale(1)')}>
+          <Plus size={15} strokeWidth={2.5} />
+        </button>
       </div>
-
-      {/* Add button */}
-      <button onClick={addNode}
-        style={{ position: 'fixed', bottom: 24, right: 24, width: 52, height: 52, borderRadius: '50%', background: '#fff', color: '#0d0d0d', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 4px 24px rgba(0,0,0,0.5)', transition: 'transform 0.18s cubic-bezier(0.34,1.56,0.64,1), box-shadow 0.15s', zIndex: 100 }}
-        onMouseEnter={e => { e.currentTarget.style.transform = 'scale(1.1)'; e.currentTarget.style.boxShadow = '0 8px 32px rgba(0,0,0,0.6)'; }}
-        onMouseLeave={e => { e.currentTarget.style.transform = 'scale(1)'; e.currentTarget.style.boxShadow = '0 4px 24px rgba(0,0,0,0.5)'; }}>
-        <Plus size={20} strokeWidth={2.5} />
-      </button>
     </div>
   );
 }
 
-function Dim({ children }: { children: React.ReactNode }) {
-  return <span style={{ opacity: 0.5, fontWeight: 400, fontSize: 11 }}>{children}</span>;
+function GlowMenuBtn({ onClick, icon, label, dim, darkMode }: { onClick: () => void; icon?: React.ReactNode; label: string; dim?: string; darkMode?: boolean }) {
+  const btnRef = useRef<HTMLButtonElement>(null);
+  const dmRef = useRef(darkMode ?? true);
+  useEffect(() => { dmRef.current = darkMode ?? true; }, [darkMode]);
+
+  useEffect(() => {
+    const btn = btnRef.current;
+    if (!btn) return;
+
+    const move = (e: MouseEvent) => {
+      const chars = btn.querySelectorAll<HTMLSpanElement>('[data-c]');
+      chars.forEach(span => {
+        const rect = span.getBoundingClientRect();
+        const cx = rect.left + rect.width / 2;
+        const cy = rect.top + rect.height / 2;
+        const dist = Math.sqrt((e.clientX - cx) ** 2 + (e.clientY - cy) ** 2);
+        const t = Math.max(0, 1 - dist / 70);
+        if (t > 0.02) {
+          const isDim = !!span.dataset.dim;
+          const base = isDim ? 0.35 : 0.78;
+          const alpha = (base + t * (1 - base)).toFixed(2);
+          span.style.color = dmRef.current ? `rgba(255,255,255,${alpha})` : `rgba(0,0,0,${alpha})`;
+          span.style.textShadow = dmRef.current
+            ? `0 0 ${(8 * t).toFixed(1)}px rgba(255,255,255,${(t * 0.85).toFixed(2)}), 0 0 ${(22 * t).toFixed(1)}px rgba(255,255,255,${(t * 0.25).toFixed(2)})`
+            : `0 0 ${(6 * t).toFixed(1)}px rgba(0,0,0,${(t * 0.3).toFixed(2)})`;
+        } else {
+          const isDim2 = !!span.dataset.dim;
+          span.style.color = dmRef.current
+            ? (isDim2 ? 'rgba(255,255,255,0.38)' : 'rgba(255,255,255,0.82)')
+            : (isDim2 ? 'rgba(0,0,0,0.35)' : 'rgba(0,0,0,0.75)');
+          span.style.textShadow = '';
+        }
+      });
+    };
+
+    const enter = () => {
+      btn.style.borderColor = dmRef.current ? 'rgba(255,255,255,0.18)' : 'rgba(0,0,0,0.15)';
+      btn.style.background = dmRef.current ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)';
+    };
+    const leave = () => {
+      btn.querySelectorAll<HTMLSpanElement>('[data-c]').forEach(s => {
+        const isDim = !!s.dataset.dim;
+        s.style.color = dmRef.current
+          ? (isDim ? 'rgba(255,255,255,0.38)' : 'rgba(255,255,255,0.82)')
+          : (isDim ? 'rgba(0,0,0,0.35)' : 'rgba(0,0,0,0.75)');
+        s.style.textShadow = '';
+      });
+      btn.style.borderColor = dmRef.current ? 'rgba(255,255,255,0.09)' : 'rgba(0,0,0,0.08)';
+      btn.style.background = dmRef.current ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.03)';
+    };
+
+    btn.addEventListener('mousemove', move);
+    btn.addEventListener('mouseenter', enter);
+    btn.addEventListener('mouseleave', leave);
+    return () => {
+      btn.removeEventListener('mousemove', move);
+      btn.removeEventListener('mouseenter', enter);
+      btn.removeEventListener('mouseleave', leave);
+    };
+  }, []);
+
+  return (
+    <button ref={btnRef} onClick={onClick}
+      style={{ width: '100%', padding: '10px 12px', borderRadius: 10, border: `1px solid ${darkMode ? 'rgba(255,255,255,0.09)' : 'rgba(0,0,0,0.08)'}`, cursor: 'pointer', background: darkMode ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.03)', fontFamily: 'Inter,system-ui', fontSize: 12, fontWeight: 600, textAlign: 'left', marginBottom: 4, display: 'flex', alignItems: 'center', gap: 6, transition: 'border-color 0.15s, background 0.15s' }}>
+      {icon && <span style={{ flexShrink: 0, color: darkMode ? 'rgba(255,255,255,0.35)' : 'rgba(0,0,0,0.35)', display: 'flex', alignItems: 'center' }}>{icon}</span>}
+      <span>
+        {label.split('').map((char, i) => (
+          <span key={i} data-c="1" style={{ color: darkMode ? 'rgba(255,255,255,0.82)' : 'rgba(0,0,0,0.75)', transition: 'color 0.06s, text-shadow 0.06s' }}>{char}</span>
+        ))}
+        {dim && <>
+          {' '}
+          {dim.split('').map((char, i) => (
+            <span key={`d${i}`} data-c="1" data-dim="1" style={{ color: darkMode ? 'rgba(255,255,255,0.38)' : 'rgba(0,0,0,0.35)', fontWeight: 400, fontSize: 11, transition: 'color 0.06s, text-shadow 0.06s' }}>{char}</span>
+          ))}
+        </>}
+      </span>
+    </button>
+  );
 }
 
-function MenuBtn({ onClick, children, accent }: { onClick: () => void; children: React.ReactNode; accent?: boolean }) {
-  const base = accent
-    ? 'linear-gradient(135deg,rgba(124,58,237,0.22),rgba(236,72,153,0.12))'
-    : 'rgba(255,255,255,0.05)';
-  const hover = accent
-    ? 'linear-gradient(135deg,rgba(124,58,237,0.38),rgba(236,72,153,0.28))'
-    : 'rgba(255,255,255,0.1)';
+function ToolBtn({ onClick, children, darkMode = true, title, bright }: { onClick: () => void; children: React.ReactNode; darkMode?: boolean; title?: string; bright?: boolean }) {
+  const base  = bright ? (darkMode ? '#fafafa' : '#444') : (darkMode ? '#555' : '#999');
+  const hover = bright ? (darkMode ? '#ffffff' : '#111') : (darkMode ? '#bbb' : '#333');
   return (
-    <button onClick={onClick}
-      style={{ width: '100%', padding: '9px 12px', borderRadius: 10, border: 'none', cursor: 'pointer', background: base, color: accent ? '#c4b5fd' : '#9ca3af', fontFamily: 'Inter,system-ui', fontSize: 12, fontWeight: 600, textAlign: 'left', marginBottom: 5, transition: 'background 0.12s', display: 'block' }}
-      onMouseEnter={e => (e.currentTarget.style.background = hover)}
-      onMouseLeave={e => (e.currentTarget.style.background = base)}>
+    <button onClick={onClick} title={title} style={{ width: 28, height: 28, borderRadius: 7, border: 'none', background: 'transparent', cursor: 'pointer', color: base, display: 'flex', alignItems: 'center', justifyContent: 'center', transition: 'background 0.12s, color 0.12s' }}
+      onMouseEnter={e => { e.currentTarget.style.background = darkMode ? '#222' : '#f0f0f0'; e.currentTarget.style.color = hover; }}
+      onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = base; }}>
       {children}
     </button>
   );
 }
 
-function ToolBtn({ onClick, children }: { onClick: () => void; children: React.ReactNode }) {
+function PromptSnake({ width, height }: { width: number; height: number }) {
+  // width = CSS content width (W=380), height = el.offsetHeight (full visual height incl. padding+border)
+  if (height < 40) return null;
+  const rx = 17, BORDER = 1, PAD = 20;
+  // SVG covers the full border-box of the panel; positioned -BORDER outside the padding box
+  const svgW = width + 2 * (PAD + BORDER); // 422
+  const svgH = height;
+  const w = svgW - 2, h = svgH - 2;
+  const perim = Math.round(2 * (w + h) - (8 - 2 * Math.PI) * rx);
+  const snakeLen = Math.min(110, perim * 0.07);
+  const gap = Math.max(1, perim - snakeLen);
+  const dur = (perim / 360).toFixed(2);
   return (
-    <button onClick={onClick} style={{ width: 28, height: 28, borderRadius: 7, border: 'none', background: 'transparent', cursor: 'pointer', color: '#555', display: 'flex', alignItems: 'center', justifyContent: 'center', transition: 'background 0.12s, color 0.12s' }}
-      onMouseEnter={e => { e.currentTarget.style.background = '#222'; e.currentTarget.style.color = '#bbb'; }}
-      onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = '#555'; }}>
-      {children}
-    </button>
+    <svg style={{ position: 'absolute', top: -BORDER, left: -BORDER, width: svgW, height: svgH, pointerEvents: 'none', zIndex: 0, overflow: 'visible' }} viewBox={`0 0 ${svgW} ${svgH}`}>
+      <defs>
+        <filter id="promptGlow" x="-40%" y="-40%" width="180%" height="180%">
+          <feGaussianBlur in="SourceGraphic" stdDeviation="4.5" result="blur" />
+          <feMerge><feMergeNode in="blur" /><feMergeNode in="SourceGraphic" /></feMerge>
+        </filter>
+      </defs>
+      <rect
+        x={1} y={1} width={w} height={h} rx={rx} ry={rx}
+        fill="none" stroke="rgba(249,115,22,0.82)" strokeWidth={1.5}
+        strokeDasharray={`${snakeLen} ${gap}`}
+        filter="url(#promptGlow)"
+        style={{
+          ['--sp' as string]: `-${perim}`,
+          animationName: 'snakeTravel',
+          animationDuration: `${dur}s`,
+          animationTimingFunction: 'linear',
+          animationIterationCount: 'infinite',
+        } as React.CSSProperties}
+      />
+    </svg>
   );
 }

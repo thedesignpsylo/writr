@@ -2,8 +2,13 @@ import Groq from 'groq-sdk';
 import express from 'express';
 import { config } from 'dotenv';
 import cors from 'cors';
+import path from 'path';
+import { fileURLToPath } from 'url';
 
 config();
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const clientDist = path.join(__dirname, 'client', 'dist');
 
 const app = express();
 app.use(cors());
@@ -30,14 +35,14 @@ app.post('/api/process-text', async (req, res) => {
 
   try {
     const completion = await groq.chat.completions.create({
-      model: 'llama-3.3-70b-versatile',
+      model: 'openai/gpt-oss-120b',
       messages: [{ role: 'user', content: prompt }],
-      max_tokens: 8192,
+      max_tokens: 4096,
     });
     res.json({ result: completion.choices[0]?.message?.content || '' });
   } catch (err) {
     console.error('Groq error:', err.message);
-    res.status(500).json({ error: 'Failed to process text.' });
+    res.status(500).json({ error: err?.error?.message || err?.message || 'Failed to process text.' });
   }
 });
 
@@ -52,9 +57,9 @@ app.post('/api/merge-text', async (req, res) => {
 
   try {
     const completion = await groq.chat.completions.create({
-      model: 'llama-3.3-70b-versatile',
+      model: 'openai/gpt-oss-120b',
       messages: [{ role: 'user', content: prompt }],
-      max_tokens: 8192,
+      max_tokens: 4096,
     });
     res.json({ result: completion.choices[0]?.message?.content || '' });
   } catch (err) {
@@ -78,7 +83,7 @@ Text: "${text.replace(/"/g, '\\"')}"`;
 
   try {
     const completion = await groq.chat.completions.create({
-      model: 'llama-3.3-70b-versatile',
+      model: 'openai/gpt-oss-120b',
       messages: [{ role: 'user', content: prompt }],
       max_tokens: 512,
     });
@@ -160,7 +165,7 @@ Adapt fluidly as the conversation evolves. Be direct, generative, and specific. 
 
   try {
     const completion = await groq.chat.completions.create({
-      model: 'llama-3.3-70b-versatile',
+      model: 'openai/gpt-oss-120b',
       messages: [
         { role: 'system', content: systemPrompt },
         ...messages.map(m => ({ role: m.role, content: m.text })),
@@ -174,6 +179,30 @@ Adapt fluidly as the conversation evolves. Be direct, generative, and specific. 
   }
 });
 
+// ── Journal summarize ─────────────────────────────────────────────────
+app.post('/api/journal-summarize', async (req, res) => {
+  const { text, canvasNodes } = req.body;
+  if (!text?.trim()) return res.status(400).json({ error: 'No journal text provided' });
+
+  const contextStr = canvasNodes?.length
+    ? '\n\nCurrent canvas nodes for additional context:\n' + canvasNodes.map((c, i) => `[${i + 1}] ${c.slice(0, 200)}`).join('\n')
+    : '';
+
+  const prompt = `You are a thoughtful journaling companion. The user has written a personal journal entry. Distill the key themes, insights, patterns, and ideas into a clear, articulate summary. Capture what they are processing, the emotions present, and any implicit questions or intentions. Be empathetic, specific, and useful.${contextStr}\n\nJournal entry:\n${text}\n\nReturn only the summary — no preamble, no labels, just the distilled insight as flowing prose.`;
+
+  try {
+    const completion = await groq.chat.completions.create({
+      model: 'openai/gpt-oss-120b',
+      messages: [{ role: 'user', content: prompt }],
+      max_tokens: 1024,
+    });
+    res.json({ result: completion.choices[0]?.message?.content || '' });
+  } catch (err) {
+    console.error('Journal error:', err.message);
+    res.status(500).json({ error: err?.error?.message || err?.message || 'Failed to summarize journal.' });
+  }
+});
+
 // ── Prompt-to-node (custom style / platform transformation) ──────────
 app.post('/api/prompt-node', async (req, res) => {
   const { text, prompt } = req.body;
@@ -184,9 +213,9 @@ app.post('/api/prompt-node', async (req, res) => {
 
   try {
     const completion = await groq.chat.completions.create({
-      model: 'llama-3.3-70b-versatile',
+      model: 'openai/gpt-oss-120b',
       messages: [{ role: 'user', content: fullPrompt }],
-      max_tokens: 8192,
+      max_tokens: 4096,
     });
     res.json({ result: completion.choices[0]?.message?.content || '' });
   } catch (err) {
@@ -194,6 +223,10 @@ app.post('/api/prompt-node', async (req, res) => {
     res.status(500).json({ error: 'Failed to transform text.' });
   }
 });
+
+// ── Serve built frontend in production (single-service deploy) ────────
+app.use(express.static(clientDist));
+app.get(/^(?!\/api).*/, (req, res) => res.sendFile(path.join(clientDist, 'index.html')));
 
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => console.log(`\n  TextCanvas server → http://localhost:${PORT}\n`));

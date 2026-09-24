@@ -5,6 +5,7 @@
   "private": true,
   "scripts": {
     "dev": "concurrently \"node server.js\" \"cd client && npm run dev\"",
+    "build": "cd client && npm install && npm run build",
     "start": "node server.js"
   },
   "dependencies": {

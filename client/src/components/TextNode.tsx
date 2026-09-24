@@ -24,15 +24,11 @@ interface Props {
   onConnectionDragStart: (fromCanvasX: number, fromCanvasY: number, mouseScreenX: number, mouseScreenY: number) => void;
   onHeightChange: (h: number) => void;
   connectedContents?: string[];
+  darkMode?: boolean;
 }
 
 const THRESHOLD = 48;
 const MAX_CONTENT_H = 480;
-const DOT_COLORS = [
-  '#818cf8','#a78bfa','#c084fc','#e879f9','#f472b6',
-  '#fb923c','#facc15','#4ade80','#34d399','#38bdf8',
-  '#60a5fa','#f87171','#fbbf24','#a3e635','#2dd4bf',
-];
 
 function toRatio(d: number, a: 'shrink' | 'expand') {
   return a === 'shrink' ? Math.max(0.12, 1 - Math.abs(d) / 450) : Math.min(4.5, 1 + d / 200);
@@ -41,7 +37,7 @@ function toRatio(d: number, a: 'shrink' | 'expand') {
 export default function TextNode({
   node, isSelected, scale, isSpaceHeld, isDragActive, isDropTarget,
   onSelect, onUpdate, onDelete, onBringToFront,
-  onConnectionDragStart, onHeightChange, connectedContents,
+  onConnectionDragStart, onHeightChange, connectedContents, darkMode = true,
 }: Props) {
   const cardRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -281,7 +277,8 @@ export default function TextNode({
   const DOT_PX = 16, dotSize = DOT_PX / scale, dotOffset = dotSize / 2, borderW = 2 / scale;
   const gripColor = dir === 'shrink' ? '#3b82f6' : dir === 'expand' ? '#22c55e' : handleHover ? '#aaa' : '#d1d5db';
   const handleBg = dir === 'shrink' ? `rgba(59,130,246,${0.1 + Math.min(0.4, Math.abs(resizeDelta) / 350)})` : dir === 'expand' ? `rgba(34,197,94,${0.1 + Math.min(0.4, resizeDelta / 350)})` : handleHover ? 'rgba(0,0,0,0.025)' : 'transparent';
-  const cardBoxShadow = node.isStreaming ? undefined : isDropTarget ? '0 0 0 2px rgba(124,58,237,0.8), 0 0 0 8px rgba(124,58,237,0.15), 0 16px 48px rgba(0,0,0,0.5)' : isSelected ? `0 0 0 2px ${dir === 'shrink' ? '#3b82f6' : dir === 'expand' ? '#22c55e' : '#3b82f6'}, 0 16px 48px rgba(0,0,0,0.55)` : '0 4px 28px rgba(0,0,0,0.4)';
+  const cardBoxShadow = isDropTarget ? '0 0 0 2px rgba(124,58,237,0.8), 0 0 0 8px rgba(124,58,237,0.15), 0 16px 48px rgba(0,0,0,0.5)' : isSelected ? `0 0 0 2px ${dir === 'shrink' ? '#3b82f6' : dir === 'expand' ? '#22c55e' : '#3b82f6'}, 0 16px 48px rgba(0,0,0,0.55)` : '0 4px 28px rgba(0,0,0,0.4)';
+  const snakeActive = node.isStreaming || node.isProcessing || isSelectionProcessing || chatLoading;
   const dotsPerRow = Math.floor((node.width - 36) / 13);
 
   // Is the content a valid JSON object? (for image nodes display)
@@ -299,12 +296,13 @@ export default function TextNode({
       {/* ── Card ────────────────────────────────────────── */}
       <div
         ref={cardRef}
-        style={{ borderRadius: 14, background: '#F6F0E9', overflow: isResizing ? 'hidden' : 'visible', height: cardHForResize, minHeight: node.isBrainstorm ? 460 : undefined, display: 'flex', flexDirection: 'column', transition: isResizing ? 'none' : 'box-shadow 0.15s ease', boxShadow: cardBoxShadow, animation: node.isStreaming ? 'streamGlow 2s ease-in-out infinite' : undefined, opacity: isDeleting ? 0 : 1 }}
+        style={{ position: 'relative', borderRadius: 14, background: darkMode ? '#1e1e1e' : '#ffffff', overflow: isResizing ? 'hidden' : 'visible', height: cardHForResize, minHeight: node.isBrainstorm ? 460 : undefined, display: 'flex', flexDirection: 'column', transition: isResizing ? 'none' : 'box-shadow 0.15s ease', boxShadow: cardBoxShadow, opacity: isDeleting ? 0 : 1 }}
       >
+        <BorderSnake width={node.width} height={cardH} active={snakeActive} id={node.id} />
         {/* Header */}
-        <div style={{ flexShrink: 0, padding: '10px 12px', background: '#EDE7DC', borderBottom: '1px solid #DDD5C8', borderRadius: '14px 14px 0 0', display: 'flex', alignItems: 'center', gap: 8, cursor: isDragging ? 'grabbing' : 'grab' }} onMouseDown={onHeaderDown}>
+        <div style={{ flexShrink: 0, padding: '10px 12px', background: darkMode ? '#252525' : '#f8f8f8', borderBottom: `1px solid ${darkMode ? '#2e2e2e' : '#eeeeee'}`, borderRadius: '14px 14px 0 0', display: 'flex', alignItems: 'center', gap: 8, cursor: isDragging ? 'grabbing' : 'grab' }} onMouseDown={onHeaderDown}>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,4px)', gap: '3px', flexShrink: 0 }}>
-            {Array.from({ length: 6 }, (_, i) => <div key={i} style={{ width: 3, height: 3, borderRadius: '50%', background: '#d0d4d9' }} />)}
+            {Array.from({ length: 6 }, (_, i) => <div key={i} style={{ width: 3, height: 3, borderRadius: '50%', background: darkMode ? '#444' : '#d0d4d9' }} />)}
           </div>
           <span style={{ flex: 1, fontFamily: 'Inter,system-ui', fontSize: 10, fontWeight: 600, letterSpacing: '0.08em', textTransform: 'uppercase', color: node.isBrainstorm ? (chatLoading ? '#555' : '#888') : node.isStreaming ? '#7c3aed' : node.isProcessing ? '#3b82f6' : isSelectionProcessing ? '#f59e0b' : node.imageData ? '#6366f1' : '#adb5bd' }}>
             {node.isBrainstorm
@@ -315,20 +313,20 @@ export default function TextNode({
               : node.imageData ? '🖼 Image Node'
               : 'Text Node'}
           </span>
-          {wordCount > 0 && !node.isProcessing && !node.isStreaming && !node.imageData && !node.isBrainstorm && <span style={{ fontFamily: 'Inter,system-ui', fontSize: 10, color: '#A5A5A5', fontWeight: 500 }}>{wordCount}w</span>}
+          {wordCount > 0 && !node.isProcessing && !node.isStreaming && !node.imageData && !node.isBrainstorm && <span style={{ fontFamily: 'Inter,system-ui', fontSize: 10, color: '#A5A5A5', fontWeight: 500 }}>{wordCount} words</span>}
           {(node.isProcessing || isSelectionProcessing) && <div style={{ width: 13, height: 13, borderRadius: '50%', border: '2px solid #dbeafe', borderTopColor: '#3b82f6', animation: 'spin 0.65s linear infinite', flexShrink: 0 }} />}
           {node.isStreaming && <div style={{ width: 13, height: 13, borderRadius: '50%', border: '2px solid #ede9fe', borderTopColor: '#7c3aed', animation: 'spin 0.65s linear infinite', flexShrink: 0 }} />}
           {chatLoading && node.isBrainstorm && <div style={{ width: 13, height: 13, borderRadius: '50%', border: '2px solid #e0e0e0', borderTopColor: '#555', animation: 'spin 0.65s linear infinite', flexShrink: 0 }} />}
           {!node.isBrainstorm && !node.isProcessing && !node.isStreaming && !node.imageData && (
             <button onClick={e => { e.stopPropagation(); onUpdate({ isBrainstorm: true, chatHistory: [] }); }} onMouseDown={e => e.stopPropagation()}
-              style={{ width: 22, height: 22, borderRadius: 6, border: 'none', background: 'transparent', cursor: 'pointer', flexShrink: 0, color: '#C8C0B8', display: 'flex', alignItems: 'center', justifyContent: 'center', transition: 'color 0.15s, background 0.15s' }}
-              onMouseEnter={e => { e.currentTarget.style.color = '#1a1a1a'; e.currentTarget.style.background = 'rgba(0,0,0,0.08)'; }}
-              onMouseLeave={e => { e.currentTarget.style.color = '#C8C0B8'; e.currentTarget.style.background = 'transparent'; }}
+              style={{ width: 22, height: 22, borderRadius: 6, border: 'none', background: 'transparent', cursor: 'pointer', flexShrink: 0, color: darkMode ? '#555' : '#C8C0B8', display: 'flex', alignItems: 'center', justifyContent: 'center', transition: 'color 0.15s, background 0.15s' }}
+              onMouseEnter={e => { e.currentTarget.style.color = darkMode ? '#ddd' : '#1a1a1a'; e.currentTarget.style.background = darkMode ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.08)'; }}
+              onMouseLeave={e => { e.currentTarget.style.color = darkMode ? '#555' : '#C8C0B8'; e.currentTarget.style.background = 'transparent'; }}
               title="Switch to Brainstorm">
               <Brain size={13} strokeWidth={2} />
             </button>
           )}
-          <button onClick={handleDeleteClick} onMouseDown={e => e.stopPropagation()} style={{ width: 22, height: 22, borderRadius: 6, border: 'none', background: 'transparent', cursor: 'pointer', flexShrink: 0, color: '#B8AFA6', display: 'flex', alignItems: 'center', justifyContent: 'center', transition: 'color 0.15s, background 0.15s' }} onMouseEnter={e => { e.currentTarget.style.color = '#ef4444'; e.currentTarget.style.background = 'rgba(239,68,68,0.1)'; }} onMouseLeave={e => { e.currentTarget.style.color = '#B8AFA6'; e.currentTarget.style.background = 'transparent'; }}><X size={13} strokeWidth={2.5} /></button>
+          <button onClick={handleDeleteClick} onMouseDown={e => e.stopPropagation()} style={{ width: 22, height: 22, borderRadius: 6, border: 'none', background: 'transparent', cursor: 'pointer', flexShrink: 0, color: darkMode ? '#4a4a4a' : '#B8AFA6', display: 'flex', alignItems: 'center', justifyContent: 'center', transition: 'color 0.15s, background 0.15s' }} onMouseEnter={e => { e.currentTarget.style.color = '#ef4444'; e.currentTarget.style.background = 'rgba(239,68,68,0.1)'; }} onMouseLeave={e => { e.currentTarget.style.color = darkMode ? '#4a4a4a' : '#B8AFA6'; e.currentTarget.style.background = 'transparent'; }}><X size={13} strokeWidth={2.5} /></button>
         </div>
 
         {/* Pasted image */}
@@ -349,17 +347,17 @@ export default function TextNode({
                 </div>
               )}
               {node.chatHistory?.map((msg, i) => (
-                <div key={i} style={{ alignSelf: msg.role === 'user' ? 'flex-end' : 'flex-start', maxWidth: '88%', padding: '9px 13px', borderRadius: msg.role === 'user' ? '14px 14px 3px 14px' : '14px 14px 14px 3px', background: msg.role === 'user' ? '#1a1a1a' : '#EDE7DC', color: msg.role === 'user' ? '#f0f0f0' : '#1a1a1a', fontFamily: "'Lora','Georgia',serif", fontSize: 13, lineHeight: 1.65, wordBreak: 'break-word', whiteSpace: 'pre-wrap' }}>
+                <div key={i} style={{ alignSelf: msg.role === 'user' ? 'flex-end' : 'flex-start', maxWidth: '88%', padding: '9px 13px', borderRadius: msg.role === 'user' ? '14px 14px 3px 14px' : '14px 14px 14px 3px', background: msg.role === 'user' ? '#1a1a1a' : (darkMode ? '#ebebeb' : '#f7f7f7'), color: msg.role === 'user' ? '#f0f0f0' : '#1a1a1a', fontFamily: "'Lora','Georgia',serif", fontSize: 13, lineHeight: 1.65, wordBreak: 'break-word', whiteSpace: 'pre-wrap' }}>
                   {msg.text}
                 </div>
               ))}
               {chatLoading && (
-                <div style={{ alignSelf: 'flex-start', padding: '10px 14px', borderRadius: '14px 14px 14px 3px', background: '#EDE7DC', display: 'flex', gap: 5, alignItems: 'center' }}>
+                <div style={{ alignSelf: 'flex-start', padding: '10px 14px', borderRadius: '14px 14px 14px 3px', background: darkMode ? '#ebebeb' : '#f7f7f7', display: 'flex', gap: 5, alignItems: 'center' }}>
                   {[0, 1, 2].map(i => <div key={i} style={{ width: 5, height: 5, borderRadius: '50%', background: '#999', animation: 'dotPulse 1.2s ease-in-out infinite', animationDelay: `${i * 0.2}s` }} />)}
                 </div>
               )}
             </div>
-            <div style={{ flexShrink: 0, borderTop: '1px solid #DDD5C8', padding: '10px 12px', display: 'flex', gap: 8, alignItems: 'flex-end' }}>
+            <div style={{ flexShrink: 0, borderTop: `1px solid ${darkMode ? '#2e2e2e' : '#eeeeee'}`, padding: '10px 12px', display: 'flex', gap: 8, alignItems: 'flex-end' }}>
               <textarea
                 ref={chatInputRef}
                 value={chatInput}
@@ -367,24 +365,24 @@ export default function TextNode({
                 onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendBrainstorm(); } }}
                 placeholder="Ask, explore, challenge…"
                 rows={1}
-                style={{ flex: 1, border: 'none', outline: 'none', resize: 'none', background: 'transparent', fontFamily: "'Lora','Georgia',serif", fontSize: 13, lineHeight: 1.6, color: '#1a1a1a', minHeight: 22, maxHeight: 72, overflowY: 'auto', padding: 0 }}
+                style={{ flex: 1, border: 'none', outline: 'none', resize: 'none', background: 'transparent', fontFamily: "'Lora','Georgia',serif", fontSize: 13, lineHeight: 1.6, color: darkMode ? '#d0d0d0' : '#1a1a1a', minHeight: 22, maxHeight: 72, overflowY: 'auto', padding: 0 }}
                 onMouseDown={e => e.stopPropagation()}
                 onClick={e => e.stopPropagation()}
               />
               <button onClick={e => { e.stopPropagation(); sendBrainstorm(); }} onMouseDown={e => e.stopPropagation()} disabled={!chatInput.trim() || chatLoading}
-                style={{ width: 32, height: 32, borderRadius: 9, border: 'none', background: chatInput.trim() && !chatLoading ? '#1a1a1a' : '#D8D0C8', cursor: chatInput.trim() && !chatLoading ? 'pointer' : 'default', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, transition: 'background 0.15s' }}>
-                <Send size={13} color={chatInput.trim() && !chatLoading ? '#fff' : '#F6F0E9'} strokeWidth={2} />
+                style={{ width: 32, height: 32, borderRadius: 9, border: 'none', background: chatInput.trim() && !chatLoading ? (darkMode ? 'rgba(255,255,255,0.88)' : '#1a1a1a') : (darkMode ? 'rgba(255,255,255,0.07)' : '#D8D0C8'), cursor: chatInput.trim() && !chatLoading ? 'pointer' : 'default', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, transition: 'background 0.15s' }}>
+                <Send size={13} color={chatInput.trim() && !chatLoading ? (darkMode ? '#1a1a1a' : '#fff') : (darkMode ? 'rgba(255,255,255,0.22)' : '#b0a8a0')} strokeWidth={2} />
               </button>
             </div>
           </div>
         ) : node.isProcessing ? (
-          <div style={{ padding: '18px 16px 14px' }}>
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 7 }}>
-              {Array.from({ length: dotsPerRow * 7 }, (_, i) => (
-                <div key={i} style={{ width: 6, height: 6, borderRadius: '50%', flexShrink: 0, background: DOT_COLORS[i % DOT_COLORS.length], animation: 'dotPulse 1.8s ease-in-out infinite', animationDelay: `${((i * 0.04) % 1.8).toFixed(2)}s` }} />
-              ))}
-            </div>
-            <div style={{ marginTop: 14, display: 'flex', alignItems: 'center', gap: 6, fontFamily: 'Inter,system-ui', fontSize: 11, color: '#9ca3af' }}><Sparkles size={11} /> Rewriting…</div>
+          <div style={{ padding: '22px 18px 16px', position: 'relative' }}>
+            {[92, 76, 95, 64, 82, 58].map((w, i) => (
+              <div key={i} style={{ position: 'relative', height: 8, width: `${w}%`, borderRadius: 20, marginBottom: i < 5 ? 12 : 0, background: 'rgba(0,0,0,0.06)', overflow: 'hidden' }}>
+                <div style={{ position: 'absolute', inset: 0, background: 'linear-gradient(90deg, transparent 0%, rgba(124,58,237,0.2) 40%, rgba(236,72,153,0.2) 60%, transparent 100%)', animation: `shimmerSlide 2s ease-in-out infinite`, animationDelay: `${i * 0.13}s` }} />
+              </div>
+            ))}
+            <div style={{ marginTop: 16, display: 'flex', alignItems: 'center', gap: 6, fontFamily: 'Inter,system-ui', fontSize: 11, color: '#bbb' }}><Sparkles size={11} /> Rewriting…</div>
           </div>
         ) : node.imageData && isJsonContent ? (
           // JSON display for image nodes
@@ -406,7 +404,7 @@ export default function TextNode({
               onChange={e => onUpdate({ content: e.target.value })}
               readOnly={!!node.isStreaming}
               placeholder={node.imageData ? 'Analyzing image…' : 'type your mind off...'}
-              style={{ display: 'block', width: '100%', border: 'none', outline: 'none', resize: 'none', padding: '18px', fontFamily: node.imageData ? "'JetBrains Mono','Fira Code',monospace" : "'Lora','Georgia',serif", fontSize: node.imageData ? 11 : 15, lineHeight: node.imageData ? 1.7 : 1.8, color: '#1a1a2e', background: 'transparent', minHeight: 100, boxSizing: 'border-box', cursor: node.isStreaming ? 'default' : 'text' }}
+              style={{ display: 'block', width: '100%', border: 'none', outline: 'none', resize: 'none', padding: '18px', fontFamily: node.imageData ? "'JetBrains Mono','Fira Code',monospace" : "'Lora','Georgia',serif", fontSize: node.imageData ? 11 : 15, lineHeight: node.imageData ? 1.7 : 1.8, color: darkMode ? '#d0d0d0' : '#1a1a2e', background: 'transparent', minHeight: 100, boxSizing: 'border-box', cursor: node.isStreaming ? 'default' : 'text' }}
               onMouseDown={e => e.stopPropagation()}
               onClick={e => e.stopPropagation()}
               onMouseUp={onTextMouseUp}
@@ -417,7 +415,7 @@ export default function TextNode({
 
         {/* Copy prompt button for image nodes */}
         {node.imageData && node.content && !node.isStreaming && (
-          <div style={{ flexShrink: 0, padding: '10px 14px', borderTop: '1px solid #DDD5C8', display: 'flex', justifyContent: 'flex-end' }}>
+          <div style={{ flexShrink: 0, padding: '10px 14px', borderTop: `1px solid ${darkMode ? '#2e2e2e' : '#eeeeee'}`, display: 'flex', justifyContent: 'flex-end' }}>
             <button
               onClick={e => { e.stopPropagation(); copyPrompt(); }}
               onMouseDown={e => e.stopPropagation()}
@@ -431,7 +429,7 @@ export default function TextNode({
 
         {/* Resize handle (not for image nodes or brainstorm nodes) */}
         {!node.imageData && !node.isBrainstorm && (
-          <div style={{ flexShrink: 0, height: 30, borderTop: '1px solid #DDD5C8', borderRadius: '0 0 14px 14px', cursor: (node.isProcessing || node.isStreaming) ? 'not-allowed' : 'ns-resize', display: 'flex', alignItems: 'center', justifyContent: 'center', position: 'relative', background: handleBg, transition: isResizing ? 'none' : 'background 0.2s ease', userSelect: 'none' }}
+          <div style={{ flexShrink: 0, height: 30, borderTop: `1px solid ${darkMode ? '#2e2e2e' : '#eeeeee'}`, borderRadius: '0 0 14px 14px', cursor: (node.isProcessing || node.isStreaming) ? 'not-allowed' : 'ns-resize', display: 'flex', alignItems: 'center', justifyContent: 'center', position: 'relative', background: handleBg, transition: isResizing ? 'none' : 'background 0.2s ease', userSelect: 'none' }}
             onMouseDown={onHandleDown} onMouseEnter={() => setHandleHover(true)} onMouseLeave={() => setHandleHover(false)}>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 3, alignItems: 'center' }}>
               {[30, 20, 30].map((w, i) => <div key={i} style={{ width: w, height: 2, borderRadius: 2, background: gripColor, transition: 'background 0.15s' }} />)}
@@ -570,5 +568,39 @@ export default function TextNode({
         </div>
       )}
     </div>
+  );
+}
+
+function BorderSnake({ width, height, active, id }: { width: number; height: number; active: boolean; id: string }) {
+  if (!active || height < 40) return null;
+  const rx = 13;
+  const w = width - 2, h = height - 2;
+  const perim = Math.round(2 * (w + h) - (8 - 2 * Math.PI) * rx);
+  const snakeLen = Math.min(90, perim * 0.065);
+  const gap = Math.max(1, perim - snakeLen);
+  const dur = (perim / 380).toFixed(2);
+  const filterId = `snakeGlow-${id}`;
+  return (
+    <svg style={{ position: 'absolute', top: 0, left: 0, width, height, pointerEvents: 'none', zIndex: 20, overflow: 'visible', borderRadius: rx }} viewBox={`0 0 ${width} ${height}`}>
+      <defs>
+        <filter id={filterId} x="-30%" y="-30%" width="160%" height="160%">
+          <feGaussianBlur in="SourceGraphic" stdDeviation="3" result="blur" />
+          <feMerge><feMergeNode in="blur" /><feMergeNode in="SourceGraphic" /></feMerge>
+        </filter>
+      </defs>
+      <rect
+        x={1} y={1} width={w} height={h} rx={rx} ry={rx}
+        fill="none" stroke="rgba(255,255,255,0.88)" strokeWidth={1.5}
+        strokeDasharray={`${snakeLen} ${gap}`}
+        filter={`url(#${filterId})`}
+        style={{
+          ['--sp' as string]: `-${perim}`,
+          animationName: 'snakeTravel',
+          animationDuration: `${dur}s`,
+          animationTimingFunction: 'linear',
+          animationIterationCount: 'infinite',
+        } as React.CSSProperties}
+      />
+    </svg>
   );
 }
